@@ -1,0 +1,6 @@
+{
+    "options": {
+        "version": "6.7.1"
+    },
+    "href": "oci://ghcr.io/stefanprodan/charts/podinfo"
+}
