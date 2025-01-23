@@ -18,14 +18,14 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net/http"
-	"os"
 	"path"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/extism/go-pdk"
+	pdk "github.com/extism/go-pdk"
 	"github.com/gjenkins8/ocigetterplugin/registry"
 )
 
@@ -51,7 +51,7 @@ type GetterOptions struct {
 type OCIGetter struct {
 	registryClient *registry.Client
 	opts           GetterOptions
-	transport      *http.Transport
+	roundTripper   http.RoundTripper
 	once           sync.Once
 }
 
@@ -98,47 +98,15 @@ func (g *OCIGetter) get(href string) (*bytes.Buffer, error) {
 }
 
 // NewOCIGetter constructs a valid http/https client as a Getter
-func NewOCIGetter(options GetterOptions) (*OCIGetter, error) {
+func NewOCIGetter(options GetterOptions, roundTripper http.RoundTripper) (*OCIGetter, error) {
 	var client OCIGetter
 
 	client.opts = options
+	client.roundTripper = roundTripper
 	return &client, nil
 }
 
 func (g *OCIGetter) newRegistryClient() (*registry.Client, error) {
-
-	if g.transport != nil {
-		client, err := registry.NewClient(
-			registry.ClientOptHTTPClient(&http.Client{
-				Transport: g.transport,
-				Timeout:   g.opts.Timeout,
-			}),
-		)
-		if err != nil {
-			return nil, err
-		}
-		return client, nil
-	}
-
-	g.once.Do(func() {
-		g.transport = &http.Transport{
-			// From https://github.com/google/go-containerregistry/blob/31786c6cbb82d6ec4fb8eb79cd9387905130534e/pkg/v1/remote/options.go#L87
-			//DisableCompression: true,
-			//DialContext: (&net.Dialer{
-			//	// By default we wrap the transport in retries, so reduce the
-			//	// default dial timeout to 5s to avoid 5x 30s of connection
-			//	// timeouts when doing the "ping" on certain http registries.
-			//	Timeout:   5 * time.Second,
-			//	KeepAlive: 30 * time.Second,
-			//}).DialContext,
-			//ForceAttemptHTTP2:     true,
-			//MaxIdleConns:          100,
-			//IdleConnTimeout:       90 * time.Second,
-			//TLSHandshakeTimeout:   10 * time.Second,
-			//ExpectContinueTimeout: 1 * time.Second,
-			//Proxy:                 http.ProxyFromEnvironment,
-		}
-	})
 
 	//if (g.opts.CertFile != "" && g.opts.KeyFile != nil) || g.opts.CAFile != nil || g.opts.InsecureSkipVerifyTLS {
 	//	tlsConf, err := tlsutil.NewClientTLS(g.opts.CertFile, g.opts.KeyFile, g.opts.CAFile, g.opts.InsecureSkipVerifyTLS)
@@ -156,7 +124,7 @@ func (g *OCIGetter) newRegistryClient() (*registry.Client, error) {
 	//}
 
 	opts := []registry.ClientOption{registry.ClientOptHTTPClient(&http.Client{
-		Transport: g.transport,
+		Transport: g.roundTripper,
 		Timeout:   g.opts.Timeout,
 	})}
 	if g.opts.PlainHTTP {
@@ -177,36 +145,118 @@ type GetterPluginInput struct {
 	HRef    string        `json:"href"`
 }
 
-//go:export greet
-func Greet() uint32 {
-	fmt.Printf("greet\n")
-	fmt.Printf("greet\n")
-	fmt.Printf("greet\n")
+type GetterPluginOutput struct {
+	ChartData *bytes.Buffer `json:"chart_data"`
+}
 
-	fmt.Printf("env[HOME]: %q\n", os.Getenv("HOME"))
+func runOciGetter(input GetterPluginInput, roundTripper http.RoundTripper) (*GetterPluginOutput, error) {
+
+	getter, err := NewOCIGetter(input.Options, roundTripper)
+	if err != nil {
+		return nil, fmt.Errorf("new oci getter failed: %q\n", err)
+	}
+
+	chartData, err := getter.Get(input.HRef)
+	if err != nil {
+		return nil, fmt.Errorf("get failed: %q\n", err)
+	}
+
+	result := GetterPluginOutput{
+		ChartData: chartData,
+	}
+
+	return &result, nil
+}
+
+type ExtismRoundTripper struct {
+}
+
+func (e *ExtismRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+
+	getHTTPMethod := func(httpMethod string) (pdk.HTTPMethod, error) {
+		switch httpMethod {
+		case "GET":
+			return pdk.MethodGet, nil
+		case "HEAD":
+			return pdk.MethodHead, nil
+		}
+
+		return pdk.HTTPMethod(0), fmt.Errorf("unknown method: %s", req.Method)
+	}
+
+	httpMethod, err := getHTTPMethod(req.Method)
+	if err != nil {
+		return nil, err
+	}
+
+	pdkReq := pdk.NewHTTPRequest(httpMethod, req.URL.String())
+	for name, values := range req.Header {
+		for _, value := range values {
+			pdkReq.SetHeader(name, value)
+		}
+	}
+
+	switch req.Method {
+	case "PUT", "POST":
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read request body: %q", err)
+		}
+		pdkReq.SetBody(body)
+	}
+
+	pdkResp := pdkReq.Send()
+
+	pdkRespBody := pdkResp.Body()
+	resp := http.Response{
+		Status:     "unknown",
+		StatusCode: int(pdkResp.Status()),
+		Proto:      "HTTP/1.1",
+		ProtoMajor: 1,
+		ProtoMinor: 1,
+		Header: func() http.Header {
+			result := http.Header{}
+			for name, value := range pdkResp.Headers() {
+				result.Set(name, value)
+			}
+
+			return result
+		}(),
+		Body:          io.NopCloser(bytes.NewReader(pdkRespBody)),
+		ContentLength: int64(len(pdkRespBody)),
+		Request:       req,
+	}
+	return &resp, nil
+}
+
+//go:export pluginhelmgetter
+func PluginHelmGetter() uint32 {
+	pdk.Log(pdk.LogInfo, "PluginRunGetter")
 
 	input := GetterPluginInput{}
 	if err := pdk.InputJSON(&input); err != nil {
-		fmt.Printf("failed to decode input: %q\n", err)
+		pdk.SetError(fmt.Errorf("failed to decode input: %q", err))
 		return 1
 	}
 
-	fmt.Printf("input: %+v\n", input)
-
-	getter, err := NewOCIGetter(input.Options)
+	pdk.Log(pdk.LogDebug, fmt.Sprintf("input: %+v", input))
+	result, err := runOciGetter(input, &ExtismRoundTripper{})
 	if err != nil {
-		fmt.Printf("new oci getter failed: %q\n", err)
+		pdk.SetError(fmt.Errorf("error fetching chart: %s %q", input.HRef, err))
 		return 2
 	}
 
-	if _, err := getter.Get(input.HRef); err != nil {
-		fmt.Printf("get failed: %q\n", err)
-		return 2
-
+	if err := pdk.OutputJSON(result); err != nil {
+		pdk.SetError(fmt.Errorf("failed to encode output: %q", err))
+		return 1
 	}
+
 	return 0
 }
 
 func main() {
 	fmt.Printf("main\n")
+
+	//input := GetterPluginInput
+	//runOciGetter(
 }

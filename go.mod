@@ -4,7 +4,10 @@ go 1.23.0
 
 toolchain go1.23.4
 
-replace github.com/sirupsen/logrus => github.com/sirupsen/logrus v1.9.4-0.20241118143825-d1e633264448
+replace (
+	github.com/sirupsen/logrus => github.com/sirupsen/logrus v1.9.4-0.20241118143825-d1e633264448
+	oras.land/oras-go/v2 => ../oras-go // https://github.com/gjenkins8/oras-go
+)
 
 require (
 	github.com/Masterminds/semver/v3 v3.3.0

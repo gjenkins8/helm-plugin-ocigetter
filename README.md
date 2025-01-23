@@ -28,7 +28,7 @@ git checkout stdlib_extensions
 git submodule update --init --recursive
 
 brew install llvm@18
-make make llvm-source llvm-build CLANG_SRC=/opt/homebrew/opt/llvm@18 LLD_SRC=/opt/homebrew/opt/llvm@18
+make llvm-source llvm-build CLANG_SRC=/opt/homebrew/opt/llvm@18 LLD_SRC=/opt/homebrew/opt/llvm@18
 make clean wasi-libc tinygo CLANG_SRC=/opt/homebrew/opt/llvm@18 LLD_SRC=/opt/homebrew/opt/llvm@18 |& grep -v "ld: warning: object file"
 ```
 

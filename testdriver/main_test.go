@@ -10,11 +10,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var data []byte = []byte(`{
+var input []byte = []byte(`{
     "options": {
-		"version": "6.7.1"
 	},
-    "href": "oci://ghcr.io/stefanprodan/charts/podinfo"
+    "href": "oci://ghcr.io/stefanprodan/charts/podinfo:6.7.1"
 }`)
 
 func TestPullOCI(t *testing.T) {
@@ -29,7 +28,9 @@ func TestPullOCI(t *testing.T) {
 			},
 		},
 		Memory: &extism.ManifestMemory{
-			MaxPages: 100,
+			MaxPages:             65535,
+			MaxHttpResponseBytes: 1024 * 1024 * 10,
+			MaxVarBytes:          1024 * 1024 * 10,
 		},
 		Config:       map[string]string{},
 		AllowedHosts: []string{"ghcr.io"},
@@ -48,7 +49,7 @@ func TestPullOCI(t *testing.T) {
 		os.Exit(1)
 	}
 
-	exit, out, err := plugin.Call("greet", data)
+	exit, out, err := plugin.Call("pluginhelmgetter", input)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(int(exit))
