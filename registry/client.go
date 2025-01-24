@@ -40,7 +40,6 @@ import (
 	"oras.land/oras-go/v2/registry"
 	"oras.land/oras-go/v2/registry/remote"
 	"oras.land/oras-go/v2/registry/remote/auth"
-	"oras.land/oras-go/v2/registry/remote/credentials"
 	"oras.land/oras-go/v2/registry/remote/retry"
 
 	"helm.sh/helm/v4/pkg/chart"
@@ -75,7 +74,6 @@ type (
 		out                io.Writer
 		authorizer         *auth.Client
 		registryAuthorizer RemoteClient
-		credentialsStore   credentials.Store
 		resolver           func(ref registry.Reference) (remotes.Resolver, error)
 		httpClient         *http.Client
 		plainHTTP          bool
@@ -145,10 +143,11 @@ func NewClient(options ...ClientOption) (*Client, error) {
 		//	client.credentialsStore = store
 		//} else {
 		//	// use Helm credentials with fallback to Docker
-		//	client.credentialsStore = credentials.NewStoreWithFallbacks(store, dockerStore)
 		//}
 
-		authorizer.Credential = nil // credentials.Credential(client.credentialsStore)
+		authorizer.Credential = func(ctx context.Context, hostport string) (auth.Credential, error) {
+			return auth.EmptyCredential, nil // TODO: HostFunction credential retriver
+		}
 
 		if client.enableCache {
 			authorizer.Cache = auth.NewCache()
@@ -245,38 +244,6 @@ type (
 	}
 )
 
-// Login logs into a registry
-func (c *Client) Login(host string, options ...LoginOption) error {
-	for _, option := range options {
-		option(&loginOperation{host, c})
-	}
-
-	reg, err := remote.NewRegistry(host)
-	if err != nil {
-		return err
-	}
-	reg.PlainHTTP = c.plainHTTP
-	reg.Client = c.authorizer
-
-	ctx := context.Background()
-	cred, err := c.authorizer.Credential(ctx, host)
-	if err != nil {
-		return fmt.Errorf("fetching credentials for %q: %w", host, err)
-	}
-
-	if err := reg.Ping(ctx); err != nil {
-		return fmt.Errorf("authenticating to %q: %w", host, err)
-	}
-
-	key := credentials.ServerAddressFromRegistry(host)
-	if err := c.credentialsStore.Put(ctx, key, cred); err != nil {
-		return err
-	}
-
-	fmt.Fprintln(c.out, "Login Succeeded")
-	return nil
-}
-
 // LoginOptBasicAuth returns a function that sets the username/password settings on login
 func LoginOptBasicAuth(username string, password string) LoginOption {
 	return func(o *loginOperation) {
@@ -371,20 +338,6 @@ type (
 
 	logoutOperation struct{}
 )
-
-// Logout logs out of a registry
-func (c *Client) Logout(host string, opts ...LogoutOption) error {
-	operation := &logoutOperation{}
-	for _, opt := range opts {
-		opt(operation)
-	}
-
-	if err := credentials.Logout(context.Background(), c.credentialsStore, host); err != nil {
-		return err
-	}
-	fmt.Fprintf(c.out, "Removing login credentials for %s\n", host)
-	return nil
-}
 
 type (
 	// PullOption allows specifying various settings on pull
@@ -632,128 +585,6 @@ type (
 		creationTime string
 	}
 )
-
-//// Push uploads a chart to a registry.
-//func (c *Client) Push(data []byte, ref string, options ...PushOption) (*PushResult, error) {
-//	parsedRef, err := newReference(ref)
-//	if err != nil {
-//		return nil, err
-//	}
-//
-//	operation := &pushOperation{
-//		strictMode: true, // By default, enable strict mode
-//	}
-//	for _, option := range options {
-//		option(operation)
-//	}
-//	meta, err := extractChartMeta(data)
-//	if err != nil {
-//		return nil, err
-//	}
-//	if operation.strictMode {
-//		if !strings.HasSuffix(ref, fmt.Sprintf("/%s:%s", meta.Name, meta.Version)) {
-//			return nil, errors.New(
-//				"strict mode enabled, ref basename and tag must match the chart name and version")
-//		}
-//	}
-//
-//	ctx := context.Background()
-//
-//	memoryStore := memory.New()
-//	chartDescriptor, err := oras.PushBytes(ctx, memoryStore, ChartLayerMediaType, data)
-//	if err != nil {
-//		return nil, err
-//	}
-//
-//	configData, err := json.Marshal(meta)
-//	if err != nil {
-//		return nil, err
-//	}
-//
-//	configDescriptor, err := oras.PushBytes(ctx, memoryStore, ConfigMediaType, configData)
-//	if err != nil {
-//		return nil, err
-//	}
-//
-//	layers := []ocispec.Descriptor{chartDescriptor}
-//	var provDescriptor ocispec.Descriptor
-//	if operation.provData != nil {
-//		provDescriptor, err = oras.PushBytes(ctx, memoryStore, ProvLayerMediaType, operation.provData)
-//		if err != nil {
-//			return nil, err
-//		}
-//
-//		layers = append(layers, provDescriptor)
-//	}
-//
-//	// sort layers for determinism, similar to how ORAS v1 does it
-//	sort.Slice(layers, func(i, j int) bool {
-//		return layers[i].Digest < layers[j].Digest
-//	})
-//
-//	ociAnnotations := generateOCIAnnotations(meta, operation.creationTime)
-//	manifest := ocispec.Manifest{
-//		Versioned:   specs.Versioned{SchemaVersion: 2},
-//		Config:      configDescriptor,
-//		Layers:      layers,
-//		Annotations: ociAnnotations,
-//	}
-//
-//	manifestData, err := json.Marshal(manifest)
-//	if err != nil {
-//		return nil, err
-//	}
-//
-//	manifestDescriptor, err := oras.TagBytes(ctx, memoryStore, ocispec.MediaTypeImageManifest, manifestData, ref)
-//	if err != nil {
-//		return nil, err
-//	}
-//
-//	repository, err := remote.NewRepository(parsedRef.String())
-//	if err != nil {
-//		return nil, err
-//	}
-//	repository.PlainHTTP = c.plainHTTP
-//	repository.Client = c.authorizer
-//
-//	manifestDescriptor, err = oras.ExtendedCopy(ctx, memoryStore, parsedRef.String(), repository, parsedRef.String(), oras.DefaultExtendedCopyOptions)
-//	if err != nil {
-//		return nil, err
-//	}
-//
-//	chartSummary := &descriptorPushSummaryWithMeta{
-//		Meta: meta,
-//	}
-//	chartSummary.Digest = chartDescriptor.Digest.String()
-//	chartSummary.Size = chartDescriptor.Size
-//	result := &PushResult{
-//		Manifest: &descriptorPushSummary{
-//			Digest: manifestDescriptor.Digest.String(),
-//			Size:   manifestDescriptor.Size,
-//		},
-//		Config: &descriptorPushSummary{
-//			Digest: configDescriptor.Digest.String(),
-//			Size:   configDescriptor.Size,
-//		},
-//		Chart: chartSummary,
-//		Prov:  &descriptorPushSummary{}, // prevent nil references
-//		Ref:   parsedRef.String(),
-//	}
-//	if operation.provData != nil {
-//		result.Prov = &descriptorPushSummary{
-//			Digest: provDescriptor.Digest.String(),
-//			Size:   provDescriptor.Size,
-//		}
-//	}
-//	fmt.Fprintf(c.out, "Pushed: %s\n", result.Ref)
-//	fmt.Fprintf(c.out, "Digest: %s\n", result.Manifest.Digest)
-//	if strings.Contains(parsedRef.orasReference.Reference, "_") {
-//		fmt.Fprintf(c.out, "%s contains an underscore.\n", result.Ref)
-//		fmt.Fprint(c.out, registryUnderscoreMessage+"\n")
-//	}
-//
-//	return result, err
-//}
 
 // PushOptProvData returns a function that sets the prov bytes setting on push
 func PushOptProvData(provData []byte) PushOption {

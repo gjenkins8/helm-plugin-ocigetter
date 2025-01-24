@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path"
 	"strings"
 	"sync"
@@ -62,15 +63,6 @@ func (g *OCIGetter) Get(href string) (*bytes.Buffer, error) {
 
 func (g *OCIGetter) get(href string) (*bytes.Buffer, error) {
 	client := g.registryClient
-	// if the user has already provided a configured registry client, use it,
-	// this is particularly true when user has his own way of handling the client credentials.
-	if client == nil {
-		c, err := g.newRegistryClient()
-		if err != nil {
-			return nil, err
-		}
-		client = c
-	}
 
 	ref := strings.TrimPrefix(href, fmt.Sprintf("%s://", registry.OCIScheme))
 
@@ -98,15 +90,22 @@ func (g *OCIGetter) get(href string) (*bytes.Buffer, error) {
 }
 
 // NewOCIGetter constructs a valid http/https client as a Getter
-func NewOCIGetter(options GetterOptions, roundTripper http.RoundTripper) (*OCIGetter, error) {
+func NewOCIGetter(options GetterOptions, roundTripper http.RoundTripper, out io.Writer) (*OCIGetter, error) {
 	var client OCIGetter
 
 	client.opts = options
 	client.roundTripper = roundTripper
+
+	registryClient, err := client.newRegistryClient(out)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create registry client: %q", err)
+	}
+	client.registryClient = registryClient
+
 	return &client, nil
 }
 
-func (g *OCIGetter) newRegistryClient() (*registry.Client, error) {
+func (g *OCIGetter) newRegistryClient(out io.Writer) (*registry.Client, error) {
 
 	//if (g.opts.CertFile != "" && g.opts.KeyFile != nil) || g.opts.CAFile != nil || g.opts.InsecureSkipVerifyTLS {
 	//	tlsConf, err := tlsutil.NewClientTLS(g.opts.CertFile, g.opts.KeyFile, g.opts.CAFile, g.opts.InsecureSkipVerifyTLS)
@@ -123,14 +122,16 @@ func (g *OCIGetter) newRegistryClient() (*registry.Client, error) {
 	//	//g.transport.TLSClientConfig = tlsConf
 	//}
 
-	opts := []registry.ClientOption{registry.ClientOptHTTPClient(&http.Client{
-		Transport: g.roundTripper,
-		Timeout:   g.opts.Timeout,
-	})}
+	opts := []registry.ClientOption{
+		registry.ClientOptHTTPClient(&http.Client{
+			Transport: g.roundTripper,
+			Timeout:   g.opts.Timeout,
+		}),
+		registry.ClientOptWriter(out),
+	}
 	if g.opts.PlainHTTP {
 		opts = append(opts, registry.ClientOptPlainHTTP())
 	}
-
 	client, err := registry.NewClient(opts...)
 
 	if err != nil {
@@ -146,12 +147,12 @@ type GetterPluginInput struct {
 }
 
 type GetterPluginOutput struct {
-	ChartData *bytes.Buffer `json:"chart_data"`
+	ChartData []byte `json:"chart_data"`
 }
 
-func runOciGetter(input GetterPluginInput, roundTripper http.RoundTripper) (*GetterPluginOutput, error) {
+func runOciGetter(input GetterPluginInput, roundTripper http.RoundTripper, out io.Writer) (*GetterPluginOutput, error) {
 
-	getter, err := NewOCIGetter(input.Options, roundTripper)
+	getter, err := NewOCIGetter(input.Options, roundTripper, out)
 	if err != nil {
 		return nil, fmt.Errorf("new oci getter failed: %q\n", err)
 	}
@@ -162,7 +163,7 @@ func runOciGetter(input GetterPluginInput, roundTripper http.RoundTripper) (*Get
 	}
 
 	result := GetterPluginOutput{
-		ChartData: chartData,
+		ChartData: chartData.Bytes(),
 	}
 
 	return &result, nil
@@ -229,6 +230,12 @@ func (e *ExtismRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	return &resp, nil
 }
 
+type WriterFunc func(p []byte) (int, error)
+
+func (f WriterFunc) Write(p []byte) (int, error) {
+	return f(p)
+}
+
 //go:export pluginhelmgetter
 func PluginHelmGetter() uint32 {
 	pdk.Log(pdk.LogInfo, "PluginRunGetter")
@@ -240,7 +247,14 @@ func PluginHelmGetter() uint32 {
 	}
 
 	pdk.Log(pdk.LogDebug, fmt.Sprintf("input: %+v", input))
-	result, err := runOciGetter(input, &ExtismRoundTripper{})
+
+	var out WriterFunc = func(p []byte) (int, error) {
+		pdk.Log(pdk.LogError, string(p))
+
+		return len(p), nil
+	}
+
+	result, err := runOciGetter(input, &ExtismRoundTripper{}, out)
 	if err != nil {
 		pdk.SetError(fmt.Errorf("error fetching chart: %s %q", input.HRef, err))
 		return 2
@@ -255,8 +269,23 @@ func PluginHelmGetter() uint32 {
 }
 
 func main() {
-	fmt.Printf("main\n")
-
-	//input := GetterPluginInput
-	//runOciGetter(
+	os.Exit(int(PluginHelmGetter()))
 }
+
+//func main() {
+//	fmt.Printf("main\n")
+//
+//	input := GetterPluginInput{
+//		HRef: "oci://ghcr.io/stefanprodan/charts/podinfo:6.7.1",
+//	}
+//
+//	var out WriterFunc = func(p []byte) (int, error) {
+//		return fmt.Println(p)
+//	}
+//
+//	_, err := runOciGetter(input, &ExtismRoundTripper{}, out)
+//	if err != nil {
+//		fmt.Println(fmt.Errorf("error fetching chart: %s %q", input.HRef, err))
+//		os.Exit(2)
+//	}
+//}
