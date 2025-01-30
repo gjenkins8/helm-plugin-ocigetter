@@ -62,7 +62,7 @@ func TestPullOCI(t *testing.T) {
 	}
 
 	exitCode, outputData, err := plugin.Call("_start", input)
-	assert.Nil(t, err)
+	require.Nil(t, err)
 	assert.Equal(t, uint32(0), exitCode)
 
 	output := GetterPluginOutput{}

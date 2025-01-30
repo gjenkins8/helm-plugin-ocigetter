@@ -236,37 +236,37 @@ func (f WriterFunc) Write(p []byte) (int, error) {
 	return f(p)
 }
 
-//go:export pluginhelmgetter
-func PluginHelmGetter() uint32 {
-	pdk.Log(pdk.LogInfo, "PluginRunGetter")
-
-	input := GetterPluginInput{}
-	if err := pdk.InputJSON(&input); err != nil {
-		pdk.SetError(fmt.Errorf("failed to decode input: %q", err))
-		return 1
-	}
-
-	pdk.Log(pdk.LogDebug, fmt.Sprintf("input: %+v", input))
-
-	var out WriterFunc = func(p []byte) (int, error) {
-		pdk.Log(pdk.LogError, string(p))
-
-		return len(p), nil
-	}
-
-	result, err := runOciGetter(input, &ExtismRoundTripper{}, out)
-	if err != nil {
-		pdk.SetError(fmt.Errorf("error fetching chart: %s %q", input.HRef, err))
-		return 2
-	}
-
-	if err := pdk.OutputJSON(result); err != nil {
-		pdk.SetError(fmt.Errorf("failed to encode output: %q", err))
-		return 1
-	}
-
-	return 0
-}
+// //go:export pluginhelmgetter
+// func PluginHelmGetter() uint32 {
+// 	pdk.Log(pdk.LogInfo, "PluginRunGetter")
+//
+// 	input := GetterPluginInput{}
+// 	if err := pdk.InputJSON(&input); err != nil {
+// 		pdk.SetError(fmt.Errorf("failed to decode input: %q", err))
+// 		return 1
+// 	}
+//
+// 	pdk.Log(pdk.LogDebug, fmt.Sprintf("input: %+v", input))
+//
+// 	var out WriterFunc = func(p []byte) (int, error) {
+// 		pdk.Log(pdk.LogError, string(p))
+//
+// 		return len(p), nil
+// 	}
+//
+// 	result, err := runOciGetter(input, &ExtismRoundTripper{}, out)
+// 	if err != nil {
+// 		pdk.SetError(fmt.Errorf("error fetching chart: %s %q", input.HRef, err))
+// 		return 2
+// 	}
+//
+// 	if err := pdk.OutputJSON(result); err != nil {
+// 		pdk.SetError(fmt.Errorf("failed to encode output: %q", err))
+// 		return 1
+// 	}
+//
+// 	return 0
+// }
 
 func main() {
 	os.Exit(int(PluginHelmGetter()))
