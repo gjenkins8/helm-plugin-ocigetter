@@ -25,7 +25,7 @@ type GetterPluginOutput struct {
 }
 
 func TestPullOCI(t *testing.T) {
-	ociGetterPluginBytes, err := os.ReadFile("../ocigetterplugin")
+	ociGetterPluginBytes, err := os.ReadFile("../ocigetterplugin.wasm")
 	require.Nil(t, err)
 
 	manifest := extism.Manifest{
