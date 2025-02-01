@@ -19,6 +19,6 @@ _(Work in progress, will post PR when ready)_
 
 ## Notes
 
-Once go v.14 is released (expected: Feb), go will support a `//go:wasmexport name` directive, allowing WASM modules to export reactor style functions:
+Once go v1.24 is released (expected: Feb 25), go will support a `//go:wasmexport name` directive, allowing WASM modules to export reactor style functions:
 - <https://tip.golang.org/doc/go1.24#wasm>
 - <https://github.com/golang/go/issues/65199>
